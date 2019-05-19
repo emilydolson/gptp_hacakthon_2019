@@ -149,6 +149,9 @@ int main(int argc, char* argv[])
     return summed_error;
   });
 
+  auto & fit_file = w.SetupFitnessFile();
+  fit_file.SetTimingRepeat(5);
+
   for (size_t i = 0; i < config.POP_SIZE(); i++) {
       emp::vector<double> vec;
       emp::AvidaGP cpu;
@@ -156,8 +159,22 @@ int main(int argc, char* argv[])
       w.Inject(cpu.GetGenome());
   }
 
+  w.SetMutFun([&config](emp::AvidaGP & org, emp::Random & random){
+    uint32_t num_muts = random.GetUInt(config.MUT_RATE());  // 0 to 3 mutations.
+    for (uint32_t m = 0; m < num_muts; m++) {
+        const uint32_t pos = random.GetUInt(config.GENOME_SIZE());
+        org.RandomizeInst(pos, random);
+    }
+    return num_muts;
+  });
+
+  w.SetAutoMutate();
+  w.SetPopStruct_Mixed(true);
+
   for (int ud = 0; ud < 1000; ud++) {
+    std::cout << ud << std::endl;
     emp::LexicaseSelect(w, fit_set, config.POP_SIZE());
+    w.Update();
   }
 
 }
