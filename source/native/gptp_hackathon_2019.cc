@@ -6,11 +6,11 @@
 
 #include "base/vector.h"
 #include "config/command_line.h"
+#include "config/ArgManager.h"
 
 // This is the main function for the NATIVE version of gptp_hackathon_2019.
 #include "Evolve/World.h"
 #include "hardware/AvidaGP.h"
-#include "TestcaseSet.h"
 
 EMP_BUILD_CONFIG( EcologyConfig,
   GROUP(MAIN, "Global settings"),
@@ -76,11 +76,88 @@ EMP_BUILD_CONFIG( EcologyConfig,
   VALUE(ECOLOGY_DATA_RES, int, 100, "How often should ecological interactions (expensive) be calculated?")
 );
 
+struct test_case {
+  emp::vector<double> initial_conditions;
+  emp::vector<double> ages;
+};
 
+emp::vector<test_case> LoadTestcases(std::string filename) {
+    std::ifstream infile(filename);
+    std::string line;
+
+    emp::vector<test_case> cases;
+
+    if (!infile.is_open()){
+        std::cout << "ERROR: " << filename << " did not open correctly" << std::endl;
+        return cases;
+    }
+
+    // Ignore header
+    getline(infile, line);
+
+    test_case t;
+    while ( getline (infile,line)) {
+        emp::vector<std::string> split_line = emp::slice(line, ',');
+        if (split_line[0] == "0") {
+          cases.push_back(t);
+          t = test_case();
+        }
+
+        for (size_t i = 0; i < 5; i++) {
+            t.initial_conditions.push_back(std::atoi(split_line[i].c_str()));
+        }
+
+        t.ages.push_back(std::atoi(split_line[33].c_str()));
+
+    }
+    infile.close();
+    return cases;
+}
 
 int main(int argc, char* argv[])
 {
-  emp::vector<std::string> args = emp::cl::args_to_strings(argc, argv);
+  using fit_fun_t = std::function<double(emp::AvidaGP &)>;
+  EcologyConfig config;
+
+  auto args = emp::cl::ArgManager(argc, argv);
+  if (args.ProcessConfigOptions(config, std::cout, "EcologyConfig.cfg", "Ecology-macros.h") == false) exit(0);
+  if (args.TestUnknown() == false) exit(0);  // If there are leftover args, throw an error.
 
   emp::World<emp::AvidaGP> w;
+  emp::vector<test_case> cases = LoadTestcases("MESA_sequences.csv");
+  emp::vector<fit_fun_t> fit_set;
+  for (test_case t : cases) {
+    fit_set.push_back([t](emp::AvidaGP & o){
+      double error = 0;
+      for (int i = 0; i < t.initial_conditions.size(); i++) {
+        o.SetInput(i, t.initial_conditions[i]);
+      }
+
+      for (int step = 0; step < t.ages.size(); step++) {
+        o.SingleProcess();
+        error += pow(o.GetOutput(0) - t.ages[step],2);
+      }
+      return -1 * error;
+    });
+  }
+
+  w.SetFitFun([fit_set](emp::AvidaGP & o){
+    double summed_error = 0;
+    for (auto fit_fun : fit_set) {
+      summed_error += fit_fun(o);
+    }
+    return summed_error;
+  });
+
+  for (size_t i = 0; i < config.POP_SIZE(); i++) {
+      emp::vector<double> vec;
+      emp::AvidaGP cpu;
+      cpu.PushRandom(w.GetRandom(), config.GENOME_SIZE());
+      w.Inject(cpu.GetGenome());
+  }
+
+  for (int ud = 0; ud < 1000; ud++) {
+    emp::LexicaseSelect(w, fit_set, config.POP_SIZE());
+  }
+
 }
